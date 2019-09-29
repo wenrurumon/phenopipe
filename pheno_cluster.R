@@ -1,0 +1,200 @@
+
+
+############################
+# Def Fucntion
+############################
+
+rm(list=ls())
+library(data.table)
+library(dplyr)
+library(fda)
+library(MASS)
+# library(GenABEL)
+library(flare)
+library(corpcor)
+
+p_ginv_sq <- function(X,p){
+  X.eigen = eigen(X);
+  X.rank = sum(X.eigen$values>1e-8);
+  X.value = X.eigen$values[1:X.rank]^(-1*p);
+  if (length(X.value)==1){
+    D = as.matrix(X.value);
+  }else{
+    D = diag(X.value);
+  }
+  rlt = X.eigen$vectors[,1:X.rank] %*% D %*% t(X.eigen$vectors[,1:X.rank]);
+  return(rlt);
+}
+mrank <- function(X){
+  X.svd = svd(X);
+  X.rank = sum(X.svd$d>1e-6);
+  return(X.rank);
+}
+mrank_sq <- function(X){
+  X.eigen = eigen(X);
+  X.rank = sum(Re(X.eigen$values)>1e-6);
+  return(X.rank);
+}
+CCA_chisq_test <- function(rho,n,p,q){
+  tstat = -1*n*sum(log(1-rho^2));
+  p_value = pchisq(tstat,(p*q),lower.tail=FALSE);
+  return(p_value);          
+}
+cca <- function(A,B){
+  n = nrow(A);
+  p = mrank(A);
+  q = mrank(B);
+  if (p <= q){
+    X = A;
+    Y = B;
+  }else{
+    X = B;
+    Y = A;
+  }
+  R = p_ginv_sq(cov(X),0.5) %*% cov(X,Y) %*% p_ginv_sq(cov(Y),1) %*% cov(Y,X) %*% p_ginv_sq(cov(X),0.5);
+  k = mrank_sq(R);
+  d = Re(eigen(R)$values);
+  rho = d[1:k]^(0.5);
+  rho[rho >= 0.9999]=0.9;
+  chisq_p = CCA_chisq_test(rho,n,p,q);
+  return(c("chisq_p"=chisq_p,"df"=p*q));
+}
+qqplot <- function(p_value){
+  n = length(p_value);
+  exp = -log10((c(1:n)-0.5)/n);
+  rgen = -log10(sort(p_value));
+  plot(exp,rgen,xlab="-log10(Expect)",ylab="-log10(Real)");
+  abline(0,1,col="red")
+}
+ccap <- function(l1,l2){
+  rlt <- sapply(l2,function(x2){
+    sapply(l1,function(x1){
+      cca(x1,x2)[[1]]
+    })
+  })
+  dimnames(rlt) <- list(names(l1),sapply(l2,function(x){colnames(x)[1]}))
+  rlt
+}
+
+############################
+# SNP
+############################
+
+setwd('/Users/wenrurumon/Documents/gaoyuan')
+qpca <- function(A,rank=0,ifscale=TRUE){
+  if(ifscale){A <- scale(as.matrix(A))[,]}
+  A.svd <- svd(A)
+  if(rank==0){
+    d <- A.svd$d
+  } else {
+    d <- A.svd$d-A.svd$d[min(rank+1,nrow(A),ncol(A))]
+  }
+  d <- d[d > 1e-8]
+  r <- length(d)
+  prop <- d^2; info <- sum(prop)/sum(A.svd$d^2);prop <- cumsum(prop/sum(prop))
+  d <- diag(d,length(d),length(d))
+  u <- A.svd$u[,1:r,drop=F]
+  v <- A.svd$v[,1:r,drop=F]
+  x <- u%*%sqrt(d)
+  y <- sqrt(d)%*%t(v)
+  z <- x %*% y
+  rlt <- list(rank=r,X=x,Y=y,Z=x%*%y,prop=prop,info=info)
+  return(rlt)
+}
+qpca2 <- function(x,p=0.99){
+  A <- qpca(x)
+  A <- qpca(x,rank=which(A$prop>p)[1])$X
+  A
+}
+load('pheno.rda')
+pheno <- pheno[1:4]
+phenos <- lapply(pheno,function(x){do.call(cbind,x)})
+phenolist <- names(which(table(unlist(lapply(phenos,colnames)))==4))
+phenos <- lapply(phenos,function(x){
+  x[,match(phenolist,colnames(x))]
+})
+phenos <- lapply(1:33,function(i){
+  scale(cbind(phenos$pheno1[,i],phenos$pheno2[,i],phenos$pheno3[,i],phenos$pheno4[,i]))
+})
+names(phenos) <- phenolist
+phnoes <- phenos[-7]
+phenos$LLS <- phenos$headache+phenos$dizziness+phenos$fatigue+phenos$difficulty_sleep+phenos$GI_symptoms
+
+#################
+
+library(igraph)
+plotnet <- function(x,mode='undirected'){
+  diag(x) <- 0
+  plot(graph_from_adjacency_matrix(t(x),mode=mode),
+       edge.arrow.size=.1,
+       vertex.size=3,
+       vertex.label.cex=1,
+       edge.width=1)
+}
+fc <- function(x){
+  w<-as.vector(t(x))[t(x)>0]
+  x <- graph_from_adjacency_matrix(x>0,mode='undirected')
+  fc <- membership(fastgreedy.community(x,weight=w))
+  fc[] <- match(fc,unique(fc))
+  fc
+}
+fc2 <- function(x){
+  x.mat <- (x<0.01/length(x))+0
+  diag(x.mat) <- 0
+  x.score <- -log(x)
+  # x.score <- log(2^x)
+  x.score[x.mat==0] <- 0
+  x.score[x.score==Inf] <- max(x.score[x.score!=Inf]*2)
+  x.score <- x.score/max(x.score)
+  x.g <- graph_from_adjacency_matrix(x.mat,mode='directed')
+  E(x.g)$weight <- as.vector(x.score)[x.mat>0]
+  x.g <- as.undirected(x.g)
+  # plotclust(x.mat,rlt <- fastgreedy.community(x.g)$membership,main=main)
+  list(network = x.mat,
+       cluster = fastgreedy.community(x.g)$membership)
+}
+plotclust <- function(x,membership=NULL,main=NULL){
+  G <- graph_from_adjacency_matrix(x>0,mode='undirected')
+  if(is.null(membership)){membership=rep(1,ncol(x))}
+  plot(create.communities(G, membership), 
+       # as.undirected(G), 
+       as.directed(G),
+       layout=layout.kamada.kawai(as.undirected(G)),
+       edge.arrow.size=.1,
+       vertex.size=.3,
+       vertex.label.cex=1,
+       edge.width=.1,
+       main=main)
+}
+pheno_cluster <- ccap(phenos,phenos)
+dimnames(pheno_cluster) <- list(names(phenos),names(phenos))
+
+###################
+
+pc <- function(p,main=NULL){
+  p.cca <- ccap(p,p)
+  dimnames(p.cca) <- list(names(p),names(p))
+  p.clust <- fc2(p.cca)
+  G <- graph_from_adjacency_matrix(p.clust$network,mode='undirected')
+  plot(create.communities(G, p.clust$cluster), 
+       as.directed(G),
+       layout=layout.kamada.kawai(as.undirected(G)),
+       edge.arrow.size=.1,
+       vertex.size=.3,
+       vertex.label.cex=1,
+       edge.width=.1,
+       main=main)
+  G.legend <- tapply(names(V(G)),p.clust$cluster,function(x){paste(x,collapse=', ')})
+  data.table(main=main,cluster=names(G.legend),nodes=G.legend)
+}
+tmp <- pc(lapply(phenos[-7],function(x){x[,1,drop=F]}),main='P1')
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,2,drop=F]}),main='P2'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,3,drop=F]}),main='P3'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,4,drop=F]}),main='P4'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,4,drop=F]-x[,1,drop=F]}),main='gap14'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,4,drop=F]-x[,2,drop=F]}),main='gap24'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,4,drop=F]-x[,3,drop=F]}),main='gap34'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,1,drop=F]-x[,3,drop=F]}),main='gap13'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,2,drop=F]-x[,3,drop=F]}),main='gap23'))
+tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,2,drop=F]-x[,1,drop=F]}),main='gap12'))
+tmp <- rbind(tmp,pc(phenos[-7],main='full'))
