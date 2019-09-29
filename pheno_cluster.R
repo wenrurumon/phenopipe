@@ -198,3 +198,68 @@ tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,1,drop=F]-x[,3,drop=F]}),ma
 tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,2,drop=F]-x[,3,drop=F]}),main='gap23'))
 tmp <- rbind(tmp,pc(lapply(phenos[-7],function(x){x[,2,drop=F]-x[,1,drop=F]}),main='gap12'))
 tmp <- rbind(tmp,pc(phenos[-7],main='full'))
+
+#########################################################
+#########################################################
+
+pc <- function(p,main=NULL){
+  pheno_cluster <- ccap(p,p)
+  dimnames(pheno_cluster) <- list(names(p),names(p))
+  g <- pheno_cluster
+  g[g>(0.01/length(pheno_cluster))] <- 1
+  g <- 1-g
+  diag(g) <- 0
+  g1 <- fc(g)
+  g2 <- lapply(unique(g1),function(i){
+    sel <- colnames(g)%in%names(which(g1==i))
+    f <- fc(g[sel,sel,drop=F])
+    f
+  })
+  for (i in 1:length(g2)){
+    g2[[i]] <- g2[[i]] * 10^(i-1)
+  }
+  g2 <- unlist(g2)
+  g2[] <- match(g2,unique(g2))
+  g <- g>0
+  g <- apply(g,2,function(x){
+    names(which(x))
+  })
+  tmp <- matrix(0,0,3)
+  colnames(tmp) <- c('source','target','value')
+  for(i in 1:length(g)){
+    tmp <- rbind(tmp,cbind(names(g)[i],names(g)[i],TRUE))
+    if(length(g[[i]])>0){tmp <- rbind(tmp,cbind(names(g)[i],g[[i]],TRUE))}
+  }
+  # return(tmp)
+  plink3 <- as.data.frame(tmp)
+  pnode2 <- data.frame(name=names(g2),group=g2,size=1)
+  return(apply(pnode2,2,paste))
+  plink3$source <- match(plink3$source,pnode2$name)-1
+  plink3$target <- match(plink3$target,pnode2$name)-1
+  forceNetwork(Links = plink3, Nodes = pnode2, Source = "source",
+               Target = "target", Value = "value", NodeID = "name",
+               Nodesize = "size",linkColour = "#999",
+               radiusCalculation = "Math.sqrt(d.nodesize)+6",
+               Group = "group", opacity =10,charge=-5, legend = F
+               ,zoom=T,opacityNoHove=100) 
+}
+
+test <- rbind(
+  cbind('full',pc(p)),
+  cbind('p1',pc(lapply(p,function(x){x[,1,drop=F]}))),
+  cbind('p2',pc(lapply(p,function(x){x[,2,drop=F]}))),
+  cbind('p3',pc(lapply(p,function(x){x[,3,drop=F]}))),
+  cbind('p4',pc(lapply(p,function(x){x[,4,drop=F]}))),
+  cbind('gap12',pc(lapply(p,function(x){x[,1,drop=F]-x[,2,drop=F]}))),
+  cbind('gap13',pc(lapply(p,function(x){x[,1,drop=F]-x[,3,drop=F]}))),
+  cbind('gap14',pc(lapply(p,function(x){x[,1,drop=F]-x[,4,drop=F]}))),
+  cbind('gap23',pc(lapply(p,function(x){x[,2,drop=F]-x[,3,drop=F]}))),
+  cbind('gap24',pc(lapply(p,function(x){x[,2,drop=F]-x[,4,drop=F]}))),
+  cbind('gap34',pc(lapply(p,function(x){x[,3,drop=F]-x[,4,drop=F]}))))
+  
+  
+  
+pc(lapply(p,function(x){x[,4,drop=F]}))
+pc(lapply(p,function(x){x[,4,drop=F]-x[,3,drop=F]}))
+
+
