@@ -1,0 +1,408 @@
+
+#########################
+# system
+#########################
+
+library(data.table)
+library(dplyr)
+library(fda)
+library(MASS)
+library(flare)
+library(corpcor)
+library(igraph)
+library(reshape2)
+head.list <- function(x){
+  out <- lapply(x,head)
+  out[1:min(3,length(out))]
+}
+
+#########################
+# pheno
+#########################
+
+setClass('pheno',slot=list(
+  data = 'array',
+  xnodes = 'character',
+  ynodes = 'character',
+  znodes = 'character',
+  pipe = 'list'
+))
+setMethod('show','pheno',function(object){
+  x <- object
+  cat('#Raw data initialized\n')
+  cat(paste0('\t',paste0(length(x@xnodes),' samples, ',
+                         length(x@ynodes),' features cross ',
+                         length(x@znodes),' sections.\n')))
+  cat('#Features include\n')
+  indnodes <- (rep(1:(ceiling(length(x@ynodes)/5)),each=5))[1:length(x@ynodes)]
+  for(i in unique(indnodes)){
+    cat(paste0('\t',(i-1)*5+1,'. ',paste0(x@ynodes[indnodes==i],collapse=','),'\n'
+    ))}
+  cat('#Sections List\n\t')
+  cat(paste(x@znodes,collapse=', '))
+  cat('\n#Pipe Process\n')
+  if(length(x@pipe)==0){
+    cat(paste0('\tNULL\n'))
+  } else {
+    for(i in names(x@pipe)){
+      cat(paste0('\t',i,'\n'))
+    }
+  }
+})
+
+#########################
+# init
+#########################
+
+init <- function(x,...) UseMethod('init')
+init.array <- function(x){
+  if(is.null(dimnames(x))){
+    xnodes <- paste0('x',1:dim(x)[1])
+    ynodes <- paste0('y',1:dim(x)[2])
+    znodes <- paste0('z',1:dim(x)[3])
+  } else {
+    if(is.null(dimnames(x)[[1]])){
+      xnodes <- paste0('x',1:dim(x)[1])
+    } else {
+      xnodes <- dimnames(x)[[1]]
+    }
+    if(is.null(dimnames(x)[[2]])){
+      ynodes <- paste0('y',1:dim(x)[2])
+    } else {
+      ynodes <- dimnames(x)[[2]]
+    }
+    if(is.null(dimnames(x)[[3]])){
+      znodes <- paste0('z',1:dim(x)[3])
+    } else {
+      znodes <- dimnames(x)[[3]]
+    }
+  }
+  dimnames(x) <- list(xnodes,ynodes,znodes)
+  p <- new('pheno',data=x,xnodes=xnodes,ynodes=ynodes,znodes=znodes)
+  return(p)
+}
+init.character <- function(...){
+  tmp <- c(...)
+  d <- lapply(tmp,fread)
+  nodes <- table(unlist(lapply(d,colnames)))
+  d <- sapply(
+    lapply(d,function(x){
+      as.matrix(x)[,match(names(nodes),colnames(x)),drop=F]
+    }), 
+    identity, simplify="array")
+  colnames(d) <- names(nodes)
+  dimnames(d)[[3]] <- tmp
+  return(init(d))
+}
+init.pheno <- function(p,data=NULL,nodes=NULL,X=NULL,Y=NULL,Z=NULL){
+  if(!is.null(data)){p@data <- data}
+  dims <- dim(p@data)
+  if(is.null(X)){X <- 1:dims[1]}
+  if(is.null(Y)){Y <- 1:dims[2]}
+  if(is.null(Z)){Z <- 1:dims[3]}
+  p@data <- p@data[X,Y,Z,drop=F]
+  init(p@data)
+}
+
+getfeature <- function(x){
+  x <- x@pipe
+  x[[max(which(names(x)=='feature'))]]
+}
+getclust <- function(x){
+  x <- x@pipe
+  x[[max(which(names(x)=='clust'))]]
+}
+getrlt <- function(x){
+  x <- x@pipe
+  x[[length(x)]]
+}
+
+#########################
+# proc
+#########################
+
+proc <- function(x,...) UseMethod('proc')
+proc.pheno <- function(x,clust=NULL,fun=NULL){
+  if(is.null(clust)){
+    if('clust'%in%names(x@pipe)){
+      clust <- getclust(x)$cluster
+      clust <- clust[match(colnames(x@data),names(clust))]
+      clust[is.na(clust)] <- max(clust,na.rm=T)+1
+      names(clust) <- colnames(x@data)
+      clust <- tapply(names(clust),clust,function(x){
+        paste0('cluster:',paste(x,collapse=';'))
+      })[clust]
+    } else {
+      clust <- colnames(x@data)
+    }
+  }
+  if(is.null(fun)){
+    fun <- function(x){return(x)}
+  }
+  rlt <- lapply(unique(clust),function(i){
+    i_n <- i
+    i <- (x@data)[,clust==i,,drop=F]
+    i <- array(i,dim=c(nrow(i),prod(dim(i)[-1])))
+    fun(i)[,,drop=F]
+  })
+  rlt <- lapply(rlt,function(x){
+    x <- x[,colMeans(is.na(x))<1,drop=F]
+    if(length(x)>0){
+      x <- apply(x,2,function(x){
+        x[is.na(x)]<-median(x,na.rm=T)
+        cbind(x)
+      })
+    }
+    x <- x[,apply(x,2,var)>0,drop=F]
+    scale(x)
+  })
+  names(rlt) <- unique(clust)
+  rlt <- rlt[sapply(rlt,length)>0]
+  x@pipe <- c(x@pipe,list(feature=rlt))
+  x
+}
+
+#########################
+# model
+#########################
+
+model <- function(x,fun,method=NULL,k=NULL){
+  if(!('feature'%in%names(x@pipe))){
+    x <- proc(x)
+  }
+  fun(x,method,k)
+} 
+
+#CCA
+cca <- function(x,...) UseMethod('cca')
+p_ginv_sq <- function(X,p){
+  X.eigen = eigen(X);
+  X.rank = sum(X.eigen$values>1e-8);
+  X.value = X.eigen$values[1:X.rank]^(-1*p);
+  if (length(X.value)==1){
+    D = as.matrix(X.value);
+  }else{
+    D = diag(X.value);
+  }
+  rlt = X.eigen$vectors[,1:X.rank] %*% D %*% t(X.eigen$vectors[,1:X.rank]);
+  return(rlt);
+}
+mrank <- function(X){
+  X.svd = svd(X);
+  X.rank = sum(X.svd$d>1e-6);
+  return(X.rank);
+}
+mrank_sq <- function(X){
+  X.eigen = eigen(X);
+  X.rank = sum(Re(X.eigen$values)>1e-6);
+  return(X.rank);
+}
+CCA_chisq_test <- function(rho,n,p,q){
+  tstat = -1*n*sum(log(1-rho^2));
+  p_value = pchisq(tstat,(p*q),lower.tail=FALSE);
+  return(p_value);          
+}
+ccap <- function(A,B){
+  n = nrow(A);
+  p = mrank(A);
+  q = mrank(B);
+  if (p <= q){
+    X = A;
+    Y = B;
+  }else{
+    X = B;
+    Y = A;
+  }
+  R = p_ginv_sq(cov(X),0.5) %*% cov(X,Y) %*% p_ginv_sq(cov(Y),1) %*% cov(Y,X) %*% p_ginv_sq(cov(X),0.5);
+  k = mrank_sq(R);
+  d = Re(eigen(R)$values);
+  rho = d[1:k]^(0.5);
+  rho[rho >= 0.9999]=0.9;
+  chisq_p = CCA_chisq_test(rho,n,p,q);
+  return(c(pvalue=chisq_p,df=p*q));
+}
+cca.list <- function(...){
+  tmp <- list(...)
+  if(length(tmp)==2){
+    x1 <- tmp[[1]]
+    x2 <- tmp[[2]]
+  } else {
+    x1 <- x2 <- tmp[[1]]
+  }
+  n1 <- names(x1)
+  n2 <- names(x2)
+  rlt <- sapply(x1,function(i){
+    (sapply(x2,function(j){
+      as.numeric(ccap(i,j)[1])
+    }))
+  })
+  rlt
+}
+cca.pheno <- function(...){
+  tmp <- list(...)
+  if(length(tmp)==2){
+    x1 <- tmp[[1]] %>% getfeature()
+    x2 <- tmp[[2]] %>% getfeature()
+  } else {
+    x1 <- x2 <- tmp[[1]] %>% getfeature()
+  }
+  tmp[[1]]@pipe <- c(tmp[[1]]@pipe,list(cca=cca(x1,x2)))
+  tmp[[1]]
+}
+
+#pca
+
+pca <- function(x,...){UseMethod('pca')}
+pca1 <- function(A,rank=0,ifscale=TRUE){
+  A <- A[,colMeans(is.na(A))<1,drop=F]
+  A <- apply(A,2,function(x){
+    x[is.na(x)] <- median(x,na.rm=T)
+    x
+  })
+  if(ncol(A)>0){
+    A <- A[,apply(A,2,var)>0,drop=F]
+  }
+  if(ifscale){A <- scale(as.matrix(A))[,]}
+  A.svd <- svd(A)
+  if(rank==0|rank==ncol(A)){
+    d <- A.svd$d
+  } else {
+    d <- A.svd$d-A.svd$d[min(rank+1,nrow(A),ncol(A))]
+    d <- d[d > 1e-8]
+  }
+  r <- length(d)
+  prop <- d^2; info <- sum(prop)/sum(A.svd$d^2);prop <- cumsum(prop/sum(prop))
+  d <- diag(d,length(d),length(d))
+  u <- A.svd$u[,1:r,drop=F]
+  v <- A.svd$v[,1:r,drop=F]
+  x <- u%*%sqrt(d)
+  y <- sqrt(d)%*%t(v)
+  z <- x %*% y
+  rlt <- list(rank=r,X=x,Y=y,Z=x%*%y,prop=prop,info=info)
+  return(rlt)
+}
+pca.matrix <- function(A,prop=0.99,ifscale=TRUE){
+  rlt <- pca1(A,rank=0,ifscale=ifscale)
+  if(prop==1){
+    return(rlt)
+  }
+  rlt <- pca1(A,rank=which(rlt$prop>=prop)[1],ifscale=TRUE)
+  return(rlt$X)
+}
+pca.list <- function(X,prop=0.99,ifscale=T){
+  lapply(lapply(X,pca,ifscale=ifscale,prop=prop),function(x){x$X})
+}
+
+#cluster
+
+clust <- function(x,method,k){
+  rlt <- method(getrlt(x),k)
+  x@pipe <- c(x@pipe,list(clust=rlt))
+  x
+}
+clust.hclust <- function(x,k){
+  rlt <- as.dist(x)
+  model <- hclust(as.dist(rlt))
+  list(data=x,model=model,cluster=cutree(model,k=k))
+}
+
+fc <- function(x){
+  w<-as.vector(t(x))[t(x)>0]
+  x <- graph_from_adjacency_matrix(x>0,mode='undirected')
+  fc <- membership(fastgreedy.community(x,weight=w))
+  fc[] <- match(fc,unique(fc))
+  fc
+}
+fci <- function(x){
+  fc0 <- fc(x)
+  if(length(unique(fc0))<=2){
+    return(fc0)
+  }
+  s <- sapply(unique(fc0),function(i){
+    mean(x[fc0==i,fc0!=i])
+  })
+  s <- ifelse(is.na(match(fc0,(unique(fc0)[s==min(s)]))),0,match(fc0,(unique(fc0)[s==min(s)])))+1
+  names(s) <- names(fc0)
+  return(s)
+}
+fc2 <- function(x,fc0){
+  n <- colnames(x)
+  loss <- sapply(unique(fc0),function(i){
+    xi <- x[fc0==i,fc0==i,drop=F]
+    fc1 <- fci(xi)
+    if(length(fc1)==1){
+      return(Inf)
+    } else {
+      1-sum(xi[outer(fc1,fc1,'==')])/sum(xi)
+    }
+  })
+  xs <- lapply(unique(fc0),function(i){
+    xi <- x[fc0==i,fc0==i,drop=F]
+    fci(xi)
+  })
+  for(i in which(loss!=min(loss))){
+    ni <- names(xs[[i]])
+    xs[[i]] <- rep(1,length(xs[[i]]))
+    names(xs[[i]]) <- ni
+  }
+  for(i in 2:length(xs)){
+    xs[[i]] <- xs[[i]] + max(xs[[i-1]])
+  }
+  unlist(xs)[match(n,names(unlist(xs)))]
+}
+fc3 <- function(x,k){
+  fc0 <- fci(x)
+  ki <- length(unique(fc0))
+  while(ki<k){
+    fc0 <- fc2(x,fc0)
+    ki <- length(unique(fc0))
+  }
+  return(fc0)
+}
+clust.fc <- function(x,k){
+  x <- (x<0.05/length(x))
+  diag(x) <- 0
+  rlt <- fc3(x,k)
+  rlt <- match(rlt,unique(rlt))
+  names(rlt) <- colnames(x)
+  list(data=x,model=NULL,cluster=rlt)
+}
+
+plotnet <- function(x,mode='undirected'){
+  diag(x) <- 0
+  plot(graph_from_adjacency_matrix(t(x),mode=mode),
+       edge.arrow.size=.1,
+       vertex.size=3,
+       vertex.label.cex=1,
+       edge.width=1)
+}
+plotclust <- function(x,...) UseMethod('plotclust')
+plotclust.matrix <- function(x,membership=NULL){
+  diag(x) <- 0
+  G <- graph_from_adjacency_matrix(x>0,mode='undirected')
+  if(is.null(membership)){membership=rep(1,ncol(x))}
+  plot(create.communities(G, membership), 
+       as.directed(G),
+       layout=layout.kamada.kawai(as.undirected(G)),
+       edge.arrow.size=0,
+       vertex.size=.3,
+       vertex.label.cex=1,
+       edge.width=.1)
+}
+plotclust.pheno <- function(x){
+  out <- getclust(x)
+  plotclust(out$data,out$cluster)
+  return(x)
+}
+
+##################################################
+##################################################
+
+#Parameter
+filename = c('/Users/wenrurumon/Desktop/forgd/pheno1.csv','/Users/wenrurumon/Desktop/forgd/pheno2.csv','/Users/wenrurumon/Desktop/forgd/pheno3.csv','/Users/wenrurumon/Desktop/forgd/pheno4.csv')
+module = init
+
+#Step 1
+
+step1 <- module(filename)
+save(step1,file='step1.rda')
