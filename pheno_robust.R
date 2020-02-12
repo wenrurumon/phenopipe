@@ -229,6 +229,23 @@ for(i in 1:length(p)){
 }
 
 ############################
+# Cluster RBST
+############################
+
+test <- sapply(1:1000,function(i){
+  print(i)
+  set.seed(i); sel <- sample(1:822,600)
+  pi <- lapply(p,function(x){x[sel,]})
+  p.cca <- ccap(pi,pi)
+  dimnames(p.cca) <- list(names(pi),names(pi))
+  p.clust <- fc2(p.cca)
+  p.clust$cluster
+})
+test <- t(test)
+colnames(test) <- names(p)
+write.csv(test,'cluster_sampling_600.csv')
+
+############################
 # Cluster
 ############################
 
@@ -275,5 +292,5 @@ hmap
 paste(rownames(mp.score),
       sapply(unique(p.clust$cluster),function(i){
         paste0(colnames(p.clust$network)[p.clust$cluster==i],collapse=', ')
-        }),
+      }),
       sep=':')
