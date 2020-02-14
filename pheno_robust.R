@@ -1,4 +1,3 @@
-
 ############################
 # Def Fucntion
 ############################
@@ -234,7 +233,7 @@ for(i in 1:length(p)){
 
 test <- sapply(1:1000,function(i){
   print(i)
-  set.seed(i); sel <- sample(1:822,600)
+  set.seed(i); sel <- sample(1:822,740)
   pi <- lapply(p,function(x){x[sel,]})
   p.cca <- ccap(pi,pi)
   dimnames(p.cca) <- list(names(pi),names(pi))
@@ -243,7 +242,67 @@ test <- sapply(1:1000,function(i){
 })
 test <- t(test)
 colnames(test) <- names(p)
-write.csv(test,'cluster_sampling_600.csv')
+table(apply(test[,colnames(test) %in% c('MCH','MCV','HCT','HGB')],1,paste,collapse=','))
+write.csv(test,'cluster_sampling_740.csv')
+
+tests <- list()
+for(j in 1:4){
+  test <- sapply(1:1000,function(i){
+    print(i)
+    set.seed(i); sel <- sample(1:822,740)
+    pi <- lapply(p,function(x){x[sel,j,drop=F]})
+    p.cca <- ccap(pi,pi)
+    dimnames(p.cca) <- list(names(pi),names(pi))
+    p.clust <- fc2(p.cca)
+    p.clust$cluster
+  })
+  test <- t(test)
+  colnames(test) <- names(p)
+  tests[[j]] <- test
+}
+for(j in 1:4){
+  write.csv(tests[[j]],paste0('cluster_sampling_740_',j,'.csv'))  
+}
+
+test <- sapply(1:10,function(i){
+  print(i)
+  set.seed(i); sel <- sample(1:822,700)
+  pi <- lapply(p,function(x){x[sel,]})
+  p.cca <- ccap(pi,pi)
+  dimnames(p.cca) <- list(names(pi),names(pi))
+  p.clust <- fc2(p.cca)
+  p.clust$cluster
+})
+test <- t(test)
+colnames(test) <- names(p)
+t(apply(test,1,function(x){
+  match(x,unique(x))
+}))
+
+table(test,p.clust$cluster)
+
+
+#
+
+test <- sapply(1:1000,function(i){
+  print(i)
+  set.seed(i); sel <- (1:822)[sample(1:822,740)]
+  pi <- lapply(p,function(x){x[sel,]})
+  p.cca <- ccap(pi,pi)
+  dimnames(p.cca) <- list(names(pi),names(pi))
+  p.clust <- fc2(p.cca)
+  p.clust$cluster
+})
+test <- t(test)
+test <- t(apply(test,1,function(x){
+  match(x,unique(x))
+}))
+colnames(test) <- names(p)
+table(apply(test,1,paste,collapse=','))
+t(unique(test))
+table(apply(test[,colnames(test) %in% c('MCH','MCV','HCT','HGB')],1,paste,collapse=','))
+
+write.csv(test,'full_sampling_kick1.csv')
 
 ############################
 # Cluster
@@ -254,6 +313,11 @@ p.cca <- ccap(p,p)
 dimnames(p.cca) <- list(names(p),names(p))
 p.clust <- fc2(p.cca)
 plotclust2(p.clust)
+
+lapply(unique(p.clust$cluster),function(i){
+  names(p)[(which(p.clust$cluster==i))]
+})
+
 mp <- lapply(unique(p.clust$cluster),function(i){
   x <- p[which(p.clust$cluster==i)]
   lapply(1:4,function(j){
