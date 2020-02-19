@@ -271,7 +271,7 @@ rlt <- rlt[match(names(sort(rlt[,4])),rownames(rlt)),]
 rlt.clust <- (sort(tapply(rlt[,4],apply(apply(rlt,1,rank),2,paste,collapse=''),mean)))
 rlt.clust <- (data.frame(names=row.names(rlt),
                          rank=match(apply(apply(rlt,1,rank),2,paste,collapse=''),names(rlt.clust))
-                         ) %>% arrange((rank)))
+) %>% arrange((rank)))
 rlt <- rlt[match(rownames(rlt),rlt.clust$names),]
 
 par(mfrow=c(3,3))
@@ -283,7 +283,7 @@ par(mfrow=c(1,1))
 paste(rownames(mp.score),
       sapply(unique(p.clust$cluster),function(i){
         paste0(colnames(p.clust$network)[p.clust$cluster==i],collapse=', ')
-        }),
+      }),
       sep=':')
 
 ############################
@@ -296,6 +296,29 @@ x.pclust <- sapply(unique(p.clust$cluster),function(i){
 })
 mean((predict(lm(x.p~x.pclust))-x.p)^2)
 mean((predict(lm(x.p~qpca(x.p,1)$X))-x.p)^2)
+
+test <- lapply(1:4,function(j){
+  x.pclust <- sapply(unique(p.clust$cluster),function(i){
+    lapply(p,function(x){x[,j,drop=F]})[p.clust$cluster==i]
+  })
+  x.pclust <- x.pclust[sapply(x.pclust,length)>1]
+  data.frame(stage=j,
+    cluster=sapply(x.pclust,function(x){paste(names(x),collapse=', ')}),
+             sapply(x.pclust,function(xi){
+               xi.qpca <- qpca(do.call(cbind,xi),rank=1)
+               xi <- sapply(xi,function(xii){
+                 c(sapply(xi,function(xij){
+                   mean((xii-predict(lm(xii~xij)))^2)
+                 }),mean((xii-predict(lm(xii~xi.qpca$X)))^2))
+               })
+               diag(xi[1:(nrow(xi)-1),]) <- NA
+               c(lm_singlepheno=mean(apply(xi[1:(nrow(xi)-1),,drop=F],2,min,na.rm=T))
+                 ,lm_multipheno=mean(xi[nrow(xi),]))
+             }) %>% t)
+})
+test <- do.call(rbind,test)
+write.csv(test,'4stage_MSE_by_cluster.csv')
+
 
 # > mean((predict(lm(x.p~qpca(x.p,9)$X))-x.p)^2)
 # [1] 0.512567
@@ -322,4 +345,3 @@ rlt33 <- rbind(cbind('cluster',rlt),cbind('pheno',rlt33))
 colnames(rlt33) <- c('model',paste0('stage',1:4))
 rlt33 <- cbind(cluster=p.clust$cluster[match(rownames(rlt33),colnames(p.clust$network))],rlt33)
 write.csv(rlt33,'cluster_change_pattern.csv')
-
