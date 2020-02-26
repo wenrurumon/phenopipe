@@ -358,3 +358,50 @@ paste(rownames(mp.score),
         paste0(colnames(p.clust$network)[p.clust$cluster==i],collapse=', ')
       }),
       sep=':')
+
+############################
+# CCA distance
+############################
+
+# p.cca <- ccap(lapply(p,scale),lapply(p,scale))
+p.cca <- ccap(p,p)
+dimnames(p.cca) <- list(names(p),names(p))
+p.clust <- fc2(p.cca)
+plotclust2(p.clust)
+
+lapply(unique(p.clust$cluster),function(i){
+  names(p)[(which(p.clust$cluster==i))]
+})
+
+mp <- lapply(unique(p.clust$cluster),function(i){
+  x <- p[which(p.clust$cluster==i)]
+  lapply(1:4,function(j){
+    sapply(x,function(x){x[,j]})
+  })
+})
+score <- function(x,y){
+  # mean((x-y)^2)
+  # cca(x,y)[1]
+  mean((y-predict(lm(y~x)))^2)
+}
+mp.score <- t(sapply(mp,function(x){
+  sapply(x,function(xi){
+    score(x[[1]],xi)
+  })
+}))
+rownames(mp.score) <- sapply(unique(p.clust$cluster),function(i){
+  paste(names(which.max(rowSums(p.clust$network[p.clust$cluster==i,,drop=F]))),collapse=',')
+})
+p.bench <- lapply(1:4,function(j){
+  sapply(p,function(x){x[,j]})
+})
+rlt <- cbind(model='cluster',
+             t(t(mp.score)/sapply(p.bench,function(xi){score(p.bench[[1]],xi)})))
+rlt2 <- cbind(model='pheno',t(sapply(p,function(x){
+  apply(x,2,function(xi){score(x[,1],xi)})
+})/sapply(p.bench,function(xi){score(p.bench[[1]],xi)})))
+rlt <- rbind(rlt,rlt2)
+rlt[,2] <- 0
+
+rlt <- cbind(cluster=p.clust$clust[match(rownames(rlt),names(p))],rlt)
+write.csv(rlt,'pattern_lmerror.csv')
