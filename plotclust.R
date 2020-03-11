@@ -1,0 +1,217 @@
+
+
+############################
+# Def Fucntion
+############################
+
+rm(list=ls())
+library(data.table)
+library(dplyr)
+library(fda)
+library(MASS)
+# library(GenABEL)
+library(flare)
+library(corpcor)
+
+p_ginv_sq <- function(X,p){
+  X.eigen = eigen(X);
+  X.rank = sum(X.eigen$values>1e-8);
+  X.value = X.eigen$values[1:X.rank]^(-1*p);
+  if (length(X.value)==1){
+    D = as.matrix(X.value);
+  }else{
+    D = diag(X.value);
+  }
+  rlt = X.eigen$vectors[,1:X.rank] %*% D %*% t(X.eigen$vectors[,1:X.rank]);
+  return(rlt);
+}
+mrank <- function(X){
+  X.svd = svd(X);
+  X.rank = sum(X.svd$d>1e-6);
+  return(X.rank);
+}
+mrank_sq <- function(X){
+  X.eigen = eigen(X);
+  X.rank = sum(Re(X.eigen$values)>1e-6);
+  return(X.rank);
+}
+CCA_chisq_test <- function(rho,n,p,q){
+  tstat = -1*n*sum(log(1-rho^2));
+  p_value = pchisq(tstat,(p*q),lower.tail=FALSE);
+  return(p_value);          
+}
+cca <- function(A,B){
+  n = nrow(A);
+  p = mrank(A);
+  q = mrank(B);
+  if (p <= q){
+    X = A;
+    Y = B;
+  }else{
+    X = B;
+    Y = A;
+  }
+  R = p_ginv_sq(cov(X),0.5) %*% cov(X,Y) %*% p_ginv_sq(cov(Y),1) %*% cov(Y,X) %*% p_ginv_sq(cov(X),0.5);
+  k = mrank_sq(R);
+  d = Re(eigen(R)$values);
+  rho = d[1:k]^(0.5);
+  rho[rho >= 0.9999]=0.9;
+  chisq_p = CCA_chisq_test(rho,n,p,q);
+  return(c("chisq_p"=chisq_p,"df"=p*q));
+}
+qqplot <- function(p_value){
+  n = length(p_value);
+  exp = -log10((c(1:n)-0.5)/n);
+  rgen = -log10(sort(p_value));
+  plot(exp,rgen,xlab="-log10(Expect)",ylab="-log10(Real)");
+  abline(0,1,col="red")
+}
+ccap <- function(l1,l2){
+  rlt <- sapply(l2,function(x2){
+    sapply(l1,function(x1){
+      cca(x1,x2)[[1]]
+    })
+  })
+  dimnames(rlt) <- list(names(l1),sapply(l2,function(x){colnames(x)[1]}))
+  rlt
+}
+qpca <- function(A,rank=0,ifscale=TRUE){
+  if(ifscale){A <- scale(as.matrix(A))[,]}
+  A.svd <- svd(A)
+  if(rank==0){
+    d <- A.svd$d
+  } else {
+    d <- A.svd$d-A.svd$d[min(rank+1,nrow(A),ncol(A))]
+  }
+  d <- d[d > 1e-8]
+  r <- length(d)
+  prop <- d^2; info <- sum(prop)/sum(A.svd$d^2);prop <- cumsum(prop/sum(prop))
+  d <- diag(d,length(d),length(d))
+  u <- A.svd$u[,1:r,drop=F]
+  v <- A.svd$v[,1:r,drop=F]
+  x <- u%*%sqrt(d)
+  y <- sqrt(d)%*%t(v)
+  z <- x %*% y
+  rlt <- list(rank=r,X=x,Y=y,Z=x%*%y,prop=prop,info=info)
+  return(rlt)
+}
+qpca2 <- function(x,p=0.99){
+  A <- qpca(x)
+  A <- qpca(x,rank=which(A$prop>p)[1])$X
+  A
+}
+setwd('/Users/wenrurumon/Documents/gaoyuan')
+load('pheno.rda')
+pheno <- pheno[1:4]
+phenos <- lapply(pheno,function(x){do.call(cbind,x)})
+phenolist <- names(which(table(unlist(lapply(phenos,colnames)))==4))
+phenos <- lapply(phenos,function(x){
+  x[,match(phenolist,colnames(x))]
+})
+phenos <- lapply(1:33,function(i){
+  scale(cbind(phenos$pheno1[,i],phenos$pheno2[,i],phenos$pheno3[,i],phenos$pheno4[,i]))
+})
+names(phenos) <- phenolist
+phnoes <- phenos[-7]
+phenos$LLS <- phenos$headache+phenos$dizziness+phenos$fatigue+phenos$difficulty_sleep+phenos$GI_symptoms
+
+library(igraph)
+plotnet <- function(x,mode='undirected'){
+  diag(x) <- 0
+  plot(graph_from_adjacency_matrix(t(x),mode=mode),
+       edge.arrow.size=.1,
+       vertex.size=3,
+       vertex.label.cex=1,
+       edge.width=1)
+}
+fc <- function(x){
+  w<-as.vector(t(x))[t(x)>0]
+  x <- graph_from_adjacency_matrix(x>0,mode='undirected')
+  fc <- membership(fastgreedy.community(x,weight=w))
+  fc[] <- match(fc,unique(fc))
+  fc
+}
+fc2 <- function(x){
+  x.mat <- (x<0.01/length(x))+0
+  diag(x.mat) <- 0
+  x.score <- -log(x)
+  # x.score <- log(2^x)
+  x.score[x.mat==0] <- 0
+  x.score[x.score==Inf] <- max(x.score[x.score!=Inf]*2)
+  x.score <- x.score/max(x.score)
+  x.g <- graph_from_adjacency_matrix(x.mat,mode='directed')
+  E(x.g)$weight <- as.vector(x.score)[x.mat>0]
+  x.g <- as.undirected(x.g)
+  # plotclust(x.mat,rlt <- fastgreedy.community(x.g)$membership,main=main)
+  list(network = x.mat,
+       cluster = fastgreedy.community(x.g)$membership)
+}
+plotclust <- function(x,membership=NULL,main=NULL){
+  G <- graph_from_adjacency_matrix(x>0,mode='undirected')
+  if(is.null(membership)){membership=rep(1,ncol(x))}
+  plot(create.communities(G, membership), 
+       # as.undirected(G), 
+       as.directed(G),
+       layout=layout.kamada.kawai(as.undirected(G)),
+       edge.arrow.size=.1,
+       vertex.size=.3,
+       vertex.label.cex=1,
+       edge.width=.1,
+       main=main)
+}
+pheno_cluster <- ccap(phenos,phenos)
+dimnames(pheno_cluster) <- list(names(phenos),names(phenos))
+
+plotclust2 <- function(p.clust){
+  library(networkD3)
+  g <- p.clust$network>0
+  g <- apply(g,2,function(x){
+    names(which(x))
+  })
+  g2 <- p.clust$cluster
+  names(g2) <- names(g)
+  g2[] <- sapply(unique(g2),function(i){
+    # paste(names(which.max(sapply(g[g2==i],length))),collapse=',')
+    paste(names(which(g2==i)),collapse=', ') %>% toupper
+  })[match(g2,unique(g2))]
+  tmp <- matrix(0,0,3)
+  colnames(tmp) <- c('source','target','value')
+  for(i in 1:length(g)){
+    tmp <- rbind(tmp,cbind(names(g)[i],names(g)[i],TRUE))
+    if(length(g[[i]])>0){tmp <- rbind(tmp,cbind(names(g)[i],g[[i]],TRUE))}
+  }
+  plink3 <- as.data.frame(tmp)
+  pnode2 <- data.frame(name=names(g2),group=g2,size=1)
+  # return(apply(pnode2,2,paste))
+  plink3$source <- match(plink3$source,pnode2$name)-1
+  plink3$target <- match(plink3$target,pnode2$name)-1
+  forceNetwork(Links = plink3, Nodes = pnode2, Source = "source",
+               Target = "target", Value = "value", NodeID = "name",
+               Nodesize = "size",linkColour = "#999",
+               radiusCalculation = "Math.sqrt(d.nodesize)+6",
+               Group = "group", opacity =20,charge=-30, legend = T
+               ,zoom=F,opacityNoHove=100) 
+}
+
+############################
+# Result
+############################
+
+p <- phenos[-7]
+p.cca <- ccap(p,p)
+dimnames(p.cca) <- list(names(p),names(p))
+p.clust <- fc2(p.cca)
+G <- graph_from_adjacency_matrix(p.clust$network,mode='undirected')
+plot(create.communities(G, p.clust$cluster), 
+     as.directed(G),
+     layout=layout.kamada.kawai(as.undirected(G)),
+     edge.arrow.size=.1,
+     vertex.size=.3,
+     vertex.label.cex=1,
+     edge.width=.1)
+data.table(names(p),p.clust$cluster)
+
+plotclust2(p.clust)
+
+
+
