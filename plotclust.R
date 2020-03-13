@@ -1,18 +1,11 @@
-
-
 ############################
 # Def Fucntion
 ############################
 
 rm(list=ls())
+setwd('/Users/wenrurumon/Documents/gaoyuan')
 library(data.table)
 library(dplyr)
-library(fda)
-library(MASS)
-# library(GenABEL)
-library(flare)
-library(corpcor)
-
 p_ginv_sq <- function(X,p){
   X.eigen = eigen(X);
   X.rank = sum(X.eigen$values>1e-8);
@@ -100,21 +93,6 @@ qpca2 <- function(x,p=0.99){
   A <- qpca(x,rank=which(A$prop>p)[1])$X
   A
 }
-setwd('/Users/wenrurumon/Documents/gaoyuan')
-load('pheno.rda')
-pheno <- pheno[1:4]
-phenos <- lapply(pheno,function(x){do.call(cbind,x)})
-phenolist <- names(which(table(unlist(lapply(phenos,colnames)))==4))
-phenos <- lapply(phenos,function(x){
-  x[,match(phenolist,colnames(x))]
-})
-phenos <- lapply(1:33,function(i){
-  scale(cbind(phenos$pheno1[,i],phenos$pheno2[,i],phenos$pheno3[,i],phenos$pheno4[,i]))
-})
-names(phenos) <- phenolist
-phnoes <- phenos[-7]
-phenos$LLS <- phenos$headache+phenos$dizziness+phenos$fatigue+phenos$difficulty_sleep+phenos$GI_symptoms
-
 library(igraph)
 plotnet <- function(x,mode='undirected'){
   diag(x) <- 0
@@ -159,9 +137,6 @@ plotclust <- function(x,membership=NULL,main=NULL){
        edge.width=.1,
        main=main)
 }
-pheno_cluster <- ccap(phenos,phenos)
-dimnames(pheno_cluster) <- list(names(phenos),names(phenos))
-
 plotclust2 <- function(p.clust){
   library(networkD3)
   g <- p.clust$network>0
@@ -171,8 +146,7 @@ plotclust2 <- function(p.clust){
   g2 <- p.clust$cluster
   names(g2) <- names(g)
   g2[] <- sapply(unique(g2),function(i){
-    # paste(names(which.max(sapply(g[g2==i],length))),collapse=',')
-    paste(names(which(g2==i)),collapse=', ') %>% toupper
+    paste(names(which.max(sapply(g[g2==i],length))),collapse=',')
   })[match(g2,unique(g2))]
   tmp <- matrix(0,0,3)
   colnames(tmp) <- c('source','target','value')
@@ -189,15 +163,69 @@ plotclust2 <- function(p.clust){
                Target = "target", Value = "value", NodeID = "name",
                Nodesize = "size",linkColour = "#999",
                radiusCalculation = "Math.sqrt(d.nodesize)+6",
-               Group = "group", opacity =20,charge=-30, legend = T
-               ,zoom=F,opacityNoHove=100) 
+               Group = "group", opacity =20,charge=-10, legend = T
+               ,zoom=T,opacityNoHove=100) 
+}
+
+#linear fix
+
+linear.fix <- function(X,lambda=1e-15){
+  X0 <- 0
+  X2 <- apply(X,2,function(x){
+    x[is.na(x)] <- mean(x,na.rm=T)
+    x
+  })
+  X2 <- sapply(1:ncol(X2),function(i){
+    predict(lm(X2[,i]~X2[,-i]))
+  })
+  X2[!is.na(X)] <- X[!is.na(X)]
+  l <- mean(abs(X2-X0))
+  if(l<=lambda){
+    return(X2)
+  }
+  X0 <- X2
+}
+minmax <- function(x){
+  (x-min(x))/(max(x)-min(x))
+}
+scale2 <- function(x){
+  (x-mean(x))/sd(x)
+}
+
+############################
+# Data
+############################
+
+f <- paste0('new.pheno',1:4,'.txt')
+f <- lapply(f,read.table,header=T)
+for(i in 1:4){
+  rownames(f[[i]]) <- f[[i]]$HID
+  f[[i]] <- t(f[[i]][,-1])
+}
+phenos <- f
+phenolist <- names(which(table(unlist(lapply(phenos,colnames)))==4))
+phenos <- lapply(phenos,function(x){
+  x[,match(phenolist,colnames(x))]
+})
+names(phenos) <- paste0('pheno',1:4)
+phenos <- lapply(1:ncol(phenos[[1]]),function(i){
+  (cbind(phenos$pheno1[,i],phenos$pheno2[,i],phenos$pheno3[,i],phenos$pheno4[,i]))
+})
+names(phenos) <- phenolist
+phnoes <- phenos[-7]
+phenos$LLS <- phenos$headache+phenos$dizziness+phenos$fatigue+phenos$difficulty_sleep+phenos$GI_symptoms
+raw <- phenos
+phenos <- lapply(phenos,linear.fix)
+# p <- lapply(phenos,minmax)[-7]
+p <- lapply(phenos,scale2)[-7]
+for(i in 1:length(p)){
+  colnames(p[[i]]) <- paste0(names(p)[i],1:4)
 }
 
 ############################
 # Result
 ############################
 
-p <- phenos[-7]
 p.cca <- ccap(p,p)
 dimnames(p.cca) <- list(names(p),names(p))
 p.clust <- fc2(p.cca)
@@ -210,8 +238,70 @@ plot(create.communities(G, p.clust$cluster),
      vertex.label.cex=1,
      edge.width=.1)
 data.table(names(p),p.clust$cluster)
-
 plotclust2(p.clust)
 
+############################
+# Result
+############################
 
+library(networkD3)
+library(tidyverse)
+library(ggplot2)
 
+p <- lapply(phenos,scale2)[-7]
+for(i in 1:length(p)){
+  colnames(p[[i]]) <- paste0(names(p)[i],1:4)
+}
+p <- lapply(1:4,function(i){
+  out <- lapply(p,function(x){
+    as.numeric(x[,i])
+  })
+  # names(out) <- paste(names(out),i,sep='_')
+  out
+})
+p <- lapply(p,function(pi){
+  lapply(unique(p.clust$cluster),function(i){
+    do.call(cbind,pi[p.clust$cluster==i])
+  })
+})
+p2 <- lapply(1:3,function(i){
+  lapply(1:length(p[[i]]),function(j){
+    p[[i+1]][[j]] - p[[i]][[j]]
+  })
+})
+p <- c(p[1],p2[1],p[2],p2[2],p[3],p2[3],p[4])
+rlt <- lapply(1:(length(p)-1),function(i){
+  x <- ccap(p[[i]],p[[i+1]])
+})
+for(i in 1:(length(rlt)-1)){
+  rownames(rlt[[i]]) <- paste0(colnames(rlt[[i]]),'_',i)
+  colnames(rlt[[i]]) <- paste0(colnames(rlt[[i]]),'_',i+1)
+}
+
+rlt <- do.call(rbind,lapply(rlt,melt))
+rlt <- select(rlt,source=Var1,target=Var2,pvalue=value) %>% mutate(value=floor(-log(pvalue,base=10))) 
+rlt$source_stage <- as.numeric(sapply(strsplit(paste(rlt$source),'_'),function(x){x[length(x)]}))
+rlt$target_stage <- as.numeric(sapply(strsplit(paste(rlt$target),'_'),function(x){x[length(x)]}))
+rlt$source <- substr(paste(rlt$source),1,nchar(paste(rlt$source))-2)
+rlt$target <- substr(paste(rlt$target),1,nchar(paste(rlt$target))-2)
+test <- filter(rlt,pvalue<=(0.1) %>% mutate(value=ceiling(value/10))
+test <- do.call(rbind,lapply(1:nrow(test),function(i){
+  temp <- test[i,]
+  temp <- rep(
+    list(rbind(c(temp$source,temp$source_stage),c(temp$target,temp$target_stage))),
+    temp$value
+    )
+  do.call(rbind,lapply(1:length(temp),function(j){
+    cbind(paste0(i,"_",j),temp[[j]])
+  }))
+}))
+test <- data.frame(id=(test[,1]),Phenotypes=test[,2],year=as.numeric(test[,3]))
+
+sk <- ggplot(test, 
+               aes(x = as.factor(year), stratum = Phenotypes, alluvium = as.factor(id), 
+                   fill = Phenotypes, label = Phenotypes)) + 
+  geom_flow() + 
+  geom_stratum(alpha = .5) + theme(legend.position = "none") + theme_minimal() + 
+  scale_x_discrete(name = "Stage") + scale_y_discrete(name = "Votes")
+
+sk
