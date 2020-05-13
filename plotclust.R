@@ -241,6 +241,29 @@ data.table(names(p),p.clust$cluster)
 plotclust2(p.clust)
 
 ############################
+# 
+############################
+
+test <- lapply(1:4,function(i){
+  lapply(unique(p.clust$cluster),function(j){
+    sapply(p[p.clust$cluster==j],function(x){x[,i]})
+  })
+})
+test[[5]] <- lapply(1:9,function(i){
+  do.call(cbind,lapply(test,function(x){x[[i]]}))
+})
+lapply(test[[5]],colnames)
+
+test <- lapply(test,function(x){
+  x <- ccap(x,x)
+  rownames(x) <- colnames(x)
+  x
+})[[5]]
+
+test <- (test <= (0.1/length(test)))
+plotclust2(list(network=test,cluster=1:9))
+
+############################
 # Result
 ############################
 
@@ -285,23 +308,23 @@ rlt$target_stage <- as.numeric(sapply(strsplit(paste(rlt$target),'_'),function(x
 rlt$source <- substr(paste(rlt$source),1,nchar(paste(rlt$source))-2)
 rlt$target <- substr(paste(rlt$target),1,nchar(paste(rlt$target))-2)
 test <- filter(rlt,pvalue<=(0.1) %>% mutate(value=ceiling(value/10))
-test <- do.call(rbind,lapply(1:nrow(test),function(i){
-  temp <- test[i,]
-  temp <- rep(
-    list(rbind(c(temp$source,temp$source_stage),c(temp$target,temp$target_stage))),
-    temp$value
-    )
-  do.call(rbind,lapply(1:length(temp),function(j){
-    cbind(paste0(i,"_",j),temp[[j]])
-  }))
-}))
-test <- data.frame(id=(test[,1]),Phenotypes=test[,2],year=as.numeric(test[,3]))
-
-sk <- ggplot(test, 
-               aes(x = as.factor(year), stratum = Phenotypes, alluvium = as.factor(id), 
-                   fill = Phenotypes, label = Phenotypes)) + 
-  geom_flow() + 
-  geom_stratum(alpha = .5) + theme(legend.position = "none") + theme_minimal() + 
-  scale_x_discrete(name = "Stage") + scale_y_discrete(name = "Votes")
-
-sk
+               test <- do.call(rbind,lapply(1:nrow(test),function(i){
+                 temp <- test[i,]
+                 temp <- rep(
+                   list(rbind(c(temp$source,temp$source_stage),c(temp$target,temp$target_stage))),
+                   temp$value
+                 )
+                 do.call(rbind,lapply(1:length(temp),function(j){
+                   cbind(paste0(i,"_",j),temp[[j]])
+                 }))
+               }))
+               test <- data.frame(id=(test[,1]),Phenotypes=test[,2],year=as.numeric(test[,3]))
+               
+               sk <- ggplot(test, 
+                            aes(x = as.factor(year), stratum = Phenotypes, alluvium = as.factor(id), 
+                                fill = Phenotypes, label = Phenotypes)) + 
+                 geom_flow() + 
+                 geom_stratum(alpha = .5) + theme(legend.position = "none") + theme_minimal() + 
+                 scale_x_discrete(name = "Stage") + scale_y_discrete(name = "Votes")
+               
+               sk
